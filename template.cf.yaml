@@ -1,3 +1,5 @@
+# Go to this link https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new
+# Look at the outputs tab once everything is completed
 ---
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Create a VPN Instance
@@ -145,3 +147,11 @@ Outputs:
   serverIPAddress:
     Description: The IP address of the server we just created
     Value: !GetAtt myVpnServer.PublicIp
+  nextStepLink:
+    Description: The link for doing your next step
+    Value:
+      Fn::Join:
+      - ""
+      - - "http://"
+        - !GetAtt myVpnServer.PublicIp
+        - ":3016"
