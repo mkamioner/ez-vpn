@@ -1,0 +1,147 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create a VPN Instance
+Metadata: {}
+Parameters:
+  Username:
+    Type: String
+    Default: admin
+  Password:
+    Type: String
+    Default: doItRight
+Mappings: {}
+Conditions: {}
+Resources:
+  myVpnVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'false'
+      Tags:
+      - Key: Name
+        Value: myVpnVpc
+  myVpnSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: us-east-1e
+      CidrBlock: 10.0.1.0/24
+      VpcId:
+        Ref: myVpnVpc
+      Tags:
+      - Key: Name
+        Value: myVpnSubnet
+  myVpnInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: myVpnInternetGateway
+  myVpnInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: myVpnVpc
+      InternetGatewayId:
+        Ref: myVpnInternetGateway
+  myVpnRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: myVpnVpc
+      Tags:
+      - Key: Name
+        Value: myVpnRouteTable
+  myVpnRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: myVpnInternetGateway
+      RouteTableId:
+        Ref: myVpnRouteTable
+  myVpnRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: myVpnRouteTable
+      SubnetId:
+        Ref: myVpnSubnet
+  myVpnSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for accessing the myVpnServer instance
+      VpcId:
+        Ref: myVpnVpc
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        CidrIp: 0.0.0.0/0
+        FromPort: 0
+        ToPort: 65535
+      SecurityGroupEgress:
+      - IpProtocol: "-1"
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: myVpnSecurityGroup
+  myVpnServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-4fffc834
+      InstanceType: t2.micro
+      KeyName: my-vpn-key-pair
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: 'true'
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: myVpnSecurityGroup
+        SubnetId:
+          Ref: myVpnSubnet
+      Tags:
+      - Key: Name
+        Value: my-vpn-server
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - ''
+          - - "#!/bin/bash -ex\n"
+            - "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1\n"
+            - "mkdir -p /etc/foo\n"
+            - "sudo yum install -y openvpn\n"
+            - "sudo modprobe iptable_nat\n"
+            - "echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward\n"
+            - "sudo iptables -t nat -A POSTROUTING -s 10.4.0.1/2 -o eth0 -j MASQUERADE\n"
+            - "sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE\n"
+            - "cd /etc/openvpn\n"
+            - "sudo openvpn --genkey --secret ovpn.key\n"
+            - "TEMP=/tmp/openvpn.conf\n"
+            - "rm -rf $TEMP\n"
+            - "sudo echo \"port 1194\" >> $TEMP\n"
+            - "sudo echo \"proto tcp-server\" >> $TEMP\n"
+            - "sudo echo \"dev tun1\" >> $TEMP\n"
+            - "sudo echo \"ifconfig 10.4.0.1 10.4.0.2\" >> $TEMP\n"
+            - "sudo echo \"status server-tcp.log\" >> $TEMP\n"
+            - "sudo echo \"verb 3\" >> $TEMP\n"
+            - "sudo echo \"secret  ovpn.key\" >> $TEMP\n"
+            - "sudo cp $TEMP openvpn.conf\n"
+            - "sudo service openvpn start\n"
+            - "sudo chmod 777 ovpn.key\n"
+            - "curl --silent --location https://rpm.nodesource.com/setup_6.x | sudo bash -\n"
+            - "sudo yum -y install nodejs\n"
+            - "export IP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4)\n"
+            - "printf '{\"name\":\"foo\",\"version\":\"1.0.0\",\"description\":\"\",\"main\":\"index.js\",\"scripts\":{\"start\":\"node server.js\"},\"author\":\"\",\"license\":\"ISC\",\"dependencies\":{\"express\":\"^4.15.4\",\"basic-auth\":\"^2.0.0\"}}' >> package.json\n"
+            - "export USERNAME="
+            - !Ref Username
+            - "\n"
+            - "export PASSWORD="
+            - !Ref Password
+            - "\n"
+            - "export PORT=3016\n"
+            - "printf 'const express=require(\"express\"),auth=require(\"basic-auth\"),app=express(),IP=process.env.IP,PORT=process.env.PORT||3e3,USERNAME=process.env.USERNAME,PASSWORD=process.env.PASSWORD;app.use((a,b,c)=>{const d=auth(a);d&&d.name===USERNAME&&d.pass===PASSWORD?c():(b.setHeader(\"WWW-Authenticate\",`Basic realm=\"example\"`),b.status(401).send(\"Access denied\"))}),app.get(\"/\",(a,b)=>b.send(`<html><head><title>EZ VPN Setup</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"https://maxcdn.bootstrapcdn.com/bootswatch/3.3.7/simplex/bootstrap.min.css\"/></head><body><div class=\"container\"><h1>EZ VPN Setup</h1><h2>IP: ${IP}</h2><p>Good news, your VPN server is all set up. Now all you need to do is set up your computer...</p><h3>Step 1: Download OpenVPN</h3><div class=\"well\"><ul><li><i>This step only needs to be done the first time you are using EZ VPN on each computer.</i></li><li>Go to the <a href=\"https://openvpn.net/index.php/open-source/downloads.html\" target=\"_blank\">OpenVPN downloads page</a> and choose the appropriate version for your operating system. Install it with the default settings. It should appear in your system tray as an icon once launched.</li></ul></div><h3>Step 2: Download your resources</h3><div class=\"well\"><ul><li>Open up a file explorer and navigate to where you installed OpenVPN, probably in your Program Files folder. (i.e. C:/Program Files/OpenVPN) and open the config folder</li><li>Right click <a href=\"ovpn.key\" target=\"_blank\" class=\"btn btn-info\">this link</a> and save the file to that directory using the name <b>ovpn.key</b>.</li><ul><li>This is your key.</li><li>It will change every time a new server is launched.</li></ul><li>Right click <a href=\"myconfig.ovpn\" target=\"_blank\" class=\"btn btn-info\">this link</a> and save the file to that directory using the name <b>myconfig.ovpn</b>.</li><ul><li>This is your configuration file.</li><li>The only change between deploys is the servers IP</li></ul></ul></div><h3>Step 3: Start OpenVPN on your computer</h3><div class=\"well\"><ul><li>Right click on OpenVPN and choose \"Run as administrator\"</li><p><img src=\"https://cdn.comparitech.com/wp-content/uploads/2016/01/ec2-vpn-17.png\"/></p><li>Now right click the OpenVPN icon in the system tray and click \"Connect\".</li><p><img src=\"https://cdn.comparitech.com/wp-content/uploads/2016/01/ec2-vpn-18.png\"/></p><li>Assuming it worked, the system tray icon will turn green</li><p><img src=\"https://cdn.comparitech.com/wp-content/uploads/2016/01/ec2-vpn-19.png\"/></p></ul></div><h3>Step 4: Congrats! You are connected!</h3><h3>Some other stuff</h3><div class=\"well\"><ul><li>Give this code out to whoever you want</li><li>I took a lot of help from <a href=\"https://www.comparitech.com/blog/vpn-privacy/how-to-make-your-own-free-vpn-using-amazon-web-services/\">this guide</a>. Feel free to take a look there if something isnt working right.</li><li>I take no responsibility for anything you may do with this resource.</li></ul><h4>Happy Hacking!</h4><i>~ Mo</i></div></div></body></html>`)),app.get(\"/ovpn.key\",(a,b)=>b.sendFile(\"/etc/openvpn/ovpn.key\")),app.get(\"/myconfig.ovpn\",(a,b)=>{const c=[`proto tcp-client`,`remote ${IP}`,`port 1194`,`dev tun`,`secret ${[`C:`,`Program Files`,`OpenVPN`,`config`,`ovpn.key`].join(`\\\\\\\\\\\\\\\\`)}`,`redirect-gateway def1`,`ifconfig 10.4.0.2 10.4.0.1`].join(`\\\\n`);b.setHeader(`Content-Type`,`application/octet-stream`),b.setHeader(`Content-Disposition`,`attachment; filename=\"myconfig.ovpn\"`),b.send(c)}),app.listen(PORT,a=>{a?console.error(\"Error launching server\",a):console.log(`Launched on port ${PORT}`,{USERNAME,PASSWORD,IP})});' >> server.js\n"
+            - "sudo npm install\n"
+            - "sudo npm install -g forever\n"
+            - "forever start server.js\n"
+Outputs:
+  serverIPAddress:
+    Description: The IP address of the server we just created
+    Value: !GetAtt myVpnServer.PublicIp
